@@ -32,6 +32,13 @@ inputs:
       with.
     required: false
     default: ''
+  base:
+    description: >
+      Git ref to diff against for change detection, e.g. github.event.before.
+      When empty, dorny/paths-filter decides from the event instead.
+      Using this requires a checkout with enough history to reach the ref.
+    required: false
+    default: ''
   base-branch:
     description: Branch to commit and push to (commit-versions phase).
     required: false
@@ -63,7 +70,7 @@ runs:
     # detection only runs in the bump-versions phase; commit-versions is handed
     # the plan it produced.
     - id: filters
-      if: inputs.phase == 'bump-versions'
+      if: inputs.phase == 'bump-versions' && inputs.base == ''
       shell: bash
       env:
         MANIFEST: ${{ inputs.manifest }}
@@ -76,13 +83,13 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - id: detect
-      if: inputs.phase == 'bump-versions'
+      if: inputs.phase == 'bump-versions' && inputs.base == ''
       uses: dorny/paths-filter@v3
       with:
         filters: ${{ steps.filters.outputs.filters }}
 
     - id: detect_list
-      if: inputs.phase == 'bump-versions'
+      if: inputs.phase == 'bump-versions' && inputs.base == ''
       shell: bash
       env:
         CHANGES: ${{ steps.detect.outputs.changes }}
@@ -96,6 +103,7 @@ runs:
         MANIFEST: ${{ inputs.manifest }}
         VERSIONS: ${{ inputs.versions }}
         CHANGED: ${{ steps.detect_list.outputs.list }}
+        BASE: ${{ inputs.base }}
         SET: ${{ inputs.packages }}
         INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
         INPUT_DEPLOY_WORKFLOW: ${{ inputs.deploy-workflow }}
@@ -104,6 +112,8 @@ runs:
         args=(--manifest "$MANIFEST" --versions "$VERSIONS" --phase "$PHASE")
         if [ "$PHASE" = commit-versions ]; then
           args+=(--set "$SET" --push)
+        elif [ -n "$BASE" ]; then
+          args+=(--base "$BASE")
         else
           args+=(--changed "$CHANGED")
         fi
