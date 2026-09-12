@@ -36,7 +36,17 @@ run() { # run [extra args...] — --changed defaults to both packages
     --manifest .github/release-packages.json "${@:---changed pkg-a,pkg-b}"
 }
 plan()  { run "$@"; }
-apply() { run --changed "${1:-pkg-a,pkg-b}" --apply >/dev/null; }
+# establish versions the way bump does: persist a plan that was "built".
+bump() { # bump '<json>' — the plan, exactly as it would have been built
+  CALVER_NOW="${NOW:-2026-09-15}" bash "$SCRIPT" \
+    --manifest .github/release-packages.json "$@" --apply >/dev/null
+}
+# helper: apply a plan derived from the current changed set
+apply() { # apply <names> [plan-date]
+  local names="$1" json
+  json=$(run --changed "$names" | jq -c '.packages')
+  bump --set "$json"
+}
 
 expect() { # expect <label> <actual> <expected>
   if [ "$2" = "$3" ]; then PASS=$((PASS + 1))
@@ -136,8 +146,33 @@ mkdir -p svc/api/cmd && echo x > svc/api/cmd/main.go
 git add -A && git commit -q -m "feat(go): x"
 expect "t11 /** matches" "$(run --base "$BASE" | jq -r '[.packages[].name]|join(",")')" "pkg-a"
 
-# --- 12. message output is JSON-encoded for GITHUB_OUTPUT ----------------
-expect "t12 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
+# --- 12. bump persists the plan it was given, never recomputes -------------
+# Simulates another push landing while this build is in flight: the versions
+# file has already moved to 2026.9.9, but the plan being bumped is the one that
+# was actually built (2026.9.5). Recomputing here would write 2026.9.10.
+fixture t12
+printf '{"pkg-a":"2026.9.9"}\n' > versions.json
+git add -A && git commit -q -m "chore: state moved on"
+bump --set '[{"name":"pkg-a","version":"2026.9.5","previous":"2026.9.4"}]'
+expect "t12 uses given version" "$(jq -r '."pkg-a"' versions.json)" "2026.9.5"
+expect "t12 commit body"        "$(git log -1 --pretty=%b)" "bump pkg-a to version 2026.9.5"
+expect "t12 keys unchanged"     "$(jq -r 'keys|join(",")' versions.json)" "pkg-a"
+
+# --- 13. bump rejects a name that is not in the manifest ------------------
+expect "t13 rejects unknown" \
+  "$(bump --set '[{"name":"nope","version":"1.2.3"}]' 2>&1 | grep -c 'unknown package' || true)" "1"
+
+# --- 14. plan and bump agree on the version -------------------------------
+fixture t14
+PLAN=$(run --changed pkg-a,pkg-b | jq -c '.packages')
+bump --set "$PLAN"
+expect "t14 a matches plan" "$(jq -r '."pkg-a"' versions.json)" "$(printf '%s' "$PLAN" | jq -r '.[0].version')"
+expect "t14 b matches plan" "$(jq -r '."pkg-b"' versions.json)" "$(printf '%s' "$PLAN" | jq -r '.[1].version')"
+expect "t14 no tags"        "$(git tag -l | wc -l | tr -d ' ')" "0"
+
+# --- 15. message output is JSON-encoded for GITHUB_OUTPUT ----------------
+fixture t15
+expect "t15 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
 
 echo
 echo "passed: $PASS   failed: $FAIL"

@@ -35,9 +35,10 @@ with no entry is treated as never released:
 {}
 ```
 
-**3.** Add a workflow. Call the action twice: `plan` first to learn which
-packages changed and what their next versions are, then `bump` last, after the
-artifacts have built.
+**3.** Add a workflow. The action runs in three phases: `plan` to learn which
+packages changed and what their next versions are, your builds to produce
+artifacts with those versions, then `bump` to persist the plan — last, so the
+versions file never points at an artifact that was never built.
 
 ```yaml
 name: Release
@@ -82,7 +83,7 @@ jobs:
       - uses: zhaochy1990/configurations/calver-release@v1
         with:
           mode: bump
-          changed: ${{ needs.plan.outputs.changed }}
+          packages: ${{ needs.plan.outputs.packages }}
           deploy-workflow: deploy.yml
 ```
 
@@ -97,7 +98,7 @@ touched more than one package.
 | `mode` | `plan` | `plan` or `bump` |
 | `manifest` | `.github/release-packages.json` | |
 | `versions` | `versions.json` | the only state |
-| `changed` | — | comma-separated names; required in `bump` mode. Pass the plan step's `changed` output. |
+| `packages` | — | the plan JSON; required in `bump` mode. Pass the plan step's `packages` output. `bump` never recomputes, so the committed version is exactly the one the artifacts were built with. |
 | `base-branch` | `master` | branch the bump commit is pushed to |
 | `deploy-workflow` | — | workflow file to dispatch once after publishing, with a `packages` input holding the plan JSON |
 
@@ -129,8 +130,11 @@ version → `MICRO + 1`. New month → `MICRO = 1`. Never released → `1`.
 - `versions.json` is committed by the Action, so branch protection must allow it.
 - Packages built from the same sources must all list those sources. They then
   bump together.
-- `bump` must be the last job: it advances `versions.json`, which downstream
-  consumers read.
+- `bump` must be the last job. It also deliberately does not recompute: if
+  another push lands while your build runs, recomputing would advance
+  `versions.json` to a version nothing was ever built for.
+- The three phases exist because a matrix build cannot run a step after all of
+  its legs succeed, and `versions.json` must not advance until they have.
 
 ## Development
 

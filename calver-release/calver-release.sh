@@ -2,21 +2,19 @@
 #
 # calver-release.sh — per-package CalVer release for a monorepo.
 #
-# Modes:
-#   (default)   print the release plan as JSON, touch nothing
-#   --apply     also rewrite the versions file and create ONE bump commit
-#   --publish   --apply, then push and dispatch the deploy workflow
+# Phases:
+#   plan   --changed a,b | --base <sha>   detect + compute; writes nothing
+#   bump   --set <json> [--apply]         persist exactly what was built
+#   publish                                --apply, then push + dispatch deploy
 #
 # State lives in a single root versions file (default versions.json). There are
-# no git tags and no commit-message markers: "which packages changed" is decided
-# from one push's diff, so no history scan is needed and a package can never be
-# skipped by a stale boundary.
+# no git tags and no commit-message markers.
 #
 # Environment:
 #   CALVER_NOW=YYYY-MM-DD   override "today" (used by tests)
 #   INPUT_BASE_BRANCH       branch to push to (default: current branch)
 #   INPUT_DEPLOY_WORKFLOW   workflow file to dispatch once after publishing
-#   GITHUB_OUTPUT           if set, plan/released are written there too
+#   GITHUB_OUTPUT           if set, outputs are written there too
 #
 set -euo pipefail
 
@@ -25,26 +23,37 @@ VERSIONS="versions.json"
 CHANGED=""
 CHANGED_MODE=""
 BASE=""
-MODE=plan
+SET=""
+APPLY=0
+PUBLISH=0
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --manifest) MANIFEST="${2:?--manifest needs a value}"; shift 2 ;;
     --versions) VERSIONS="${2:?--versions needs a value}"; shift 2 ;;
     --changed)  CHANGED="${2?--changed needs a value}"; CHANGED_MODE=list; shift 2 ;;
     --base)     BASE="${2?--base needs a value}"; CHANGED_MODE=base; shift 2 ;;
-    --apply)    MODE=apply; shift ;;
-    --publish)  MODE=publish; shift ;;
-    -h|--help)  sed -n '3,18p' "$0"; exit 0 ;;
+    --set)      SET="${2?--set needs a value}"; shift 2 ;;
+    --apply)    APPLY=1; shift ;;
+    --publish)  APPLY=1; PUBLISH=1; shift ;;
+    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
     *) echo "calver-release: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 command -v jq >/dev/null || { echo "calver-release: jq is required" >&2; exit 1; }
 [ -f "$MANIFEST" ] || { echo "calver-release: no manifest at $MANIFEST" >&2; exit 1; }
-if [ -z "$CHANGED_MODE" ]; then
-  echo "calver-release: pass --changed a,b or --base <sha> to say what changed" >&2
+if [ -z "$CHANGED_MODE" ] && [ -z "$SET" ]; then
+  echo "calver-release: pass --changed a,b / --base <sha> to plan, or --set <json> to bump" >&2
   exit 2
 fi
+if [ -n "$SET" ] && [ -n "$CHANGED_MODE" ]; then
+  echo "calver-release: --set and --changed/--base are mutually exclusive" >&2
+  exit 2
+fi
+
+TMPD=$(mktemp -d)
+trap 'rm -rf "$TMPD"' EXIT
 
 # ---------------------------------------------------------------------------
 # Clock. CalVer is YYYY.M.MICRO with MICRO resetting to 1 in a new month.
@@ -74,75 +83,99 @@ matches_path() {  # matches_path <file> <prefix>
   return 1
 }
 
+manifest_names() { jq -r '.packages[].name' "$MANIFEST"; }
+
 # ---------------------------------------------------------------------------
-# Which packages changed: from an explicit list, or from the push diff.
+# Resolve the release set.
+#
+#   --changed / --base   plan: detect what this push touched, then compute the
+#                        next version by reading the versions file.
+#   --set <json>         bump: persist the plan that was already built and
+#                        shipped. Deliberately does NOT recompute — if another
+#                        push lands while this build runs, recomputing here
+#                        would advance the versions file to a number that
+#                        nothing was ever built for.
 # ---------------------------------------------------------------------------
-if [ "$CHANGED_MODE" = list ]; then
-  CHANGED_LIST=$(printf '%s' "$CHANGED" | tr ',' ' ')
+if [ -n "$SET" ]; then
+  PACKAGES=$(printf '%s' "$SET" | jq -c '.')
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if ! manifest_names | grep -qxF "$n"; then
+      echo "calver-release: --set names an unknown package: $n" >&2
+      exit 1
+    fi
+  done < <(printf '%s' "$PACKAGES" | jq -r '.[].name')
 else
-  DIFF_FILES=$(git diff --name-only "$BASE" HEAD)
-  CHANGED_LIST=""
-  n_pkgs=$(jq '.packages | length' "$MANIFEST")
-  k=0
-  while [ "$k" -lt "$n_pkgs" ]; do
-    nm=$(jq -r ".packages[$k].name" "$MANIFEST")
-    hit=0
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      while IFS= read -r pfx; do
-        [ -n "$pfx" ] || continue
-        if matches_path "$f" "$pfx"; then hit=1; break; fi
-      done < <(jq -r ".packages[$k].paths[]?" "$MANIFEST")
-      [ "$hit" -eq 1 ] && break
-    done <<<"$DIFF_FILES"
-    [ "$hit" -eq 1 ] && CHANGED_LIST="$CHANGED_LIST $nm"
-    k=$((k + 1))
+  if [ "$CHANGED_MODE" = list ]; then
+    CHANGED_LIST=$(printf '%s' "$CHANGED" | tr ',' ' ')
+  else
+    CHANGED_LIST=""
+    DIFF_FILES=$(git diff --name-only "$BASE" HEAD)
+    n_pkgs=$(jq '.packages | length' "$MANIFEST")
+    k=0
+    while [ "$k" -lt "$n_pkgs" ]; do
+      nm=$(jq -r ".packages[$k].name" "$MANIFEST")
+      hit=0
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        while IFS= read -r pfx; do
+          [ -n "$pfx" ] || continue
+          if matches_path "$f" "$pfx"; then hit=1; break; fi
+        done < <(jq -r ".packages[$k].paths[]?" "$MANIFEST")
+        [ "$hit" -eq 1 ] && break
+      done <<<"$DIFF_FILES"
+      [ "$hit" -eq 1 ] && CHANGED_LIST="$CHANGED_LIST $nm"
+      k=$((k + 1))
+    done
+  fi
+
+  is_changed() {
+    local n
+    for n in $CHANGED_LIST; do [ "$n" = "$1" ] && return 0; done
+    return 1
+  }
+
+  ROWS="$TMPD/rows.jsonl"
+  : > "$ROWS"
+  pkg_count=$(jq '.packages | length' "$MANIFEST")
+  i=0
+  while [ "$i" -lt "$pkg_count" ]; do
+    name=$(jq -r ".packages[$i].name // empty" "$MANIFEST")
+    [ -n "$name" ] || { echo "calver-release: packages[$i].name is missing" >&2; exit 1; }
+    i=$((i + 1))
+    is_changed "$name" || continue
+    if [ -f "$VERSIONS" ]; then
+      previous=$(jq -r --arg n "$name" '.[$n] // empty' "$VERSIONS")
+    else
+      previous=""
+    fi
+    version=$(next_version "$previous")
+    jq -nc --arg name "$name" --arg version "$version" --arg previous "$previous" \
+      '{name:$name, version:$version, previous:$previous}' >> "$ROWS"
   done
+  PACKAGES=$(jq -s '.' "$ROWS")
 fi
 
-is_changed() {  # is_changed <name>
-  local n
-  for n in $CHANGED_LIST; do [ "$n" = "$1" ] && return 0; done
-  return 1
-}
-
 # ---------------------------------------------------------------------------
-# Plan: next version for every changed package, read from the versions file.
+# Apply the release set to the versions file.
 # ---------------------------------------------------------------------------
-ROWS=$(mktemp)
-NEWVERSIONS=$(mktemp)
-trap 'rm -f "$ROWS" "$NEWVERSIONS"' EXIT
-: > "$ROWS"
+NEWVERSIONS="$TMPD/versions.json"
 if [ -f "$VERSIONS" ]; then cp "$VERSIONS" "$NEWVERSIONS"; else printf '{}\n' > "$NEWVERSIONS"; fi
+while IFS=$'\t' read -r n v; do
+  [ -n "$n" ] || continue
+  jq --arg n "$n" --arg v "$v" '.[$n] = $v' "$NEWVERSIONS" > "$NEWVERSIONS.next"
+  mv "$NEWVERSIONS.next" "$NEWVERSIONS"
+done < <(printf '%s' "$PACKAGES" | jq -r '.[] | [.name, .version] | @tsv')
 
 BUMP=()
-pkg_count=$(jq '.packages | length' "$MANIFEST")
-i=0
-while [ "$i" -lt "$pkg_count" ]; do
-  name=$(jq -r ".packages[$i].name // empty" "$MANIFEST")
-  [ -n "$name" ] || { echo "calver-release: packages[$i].name is missing" >&2; exit 1; }
-  i=$((i + 1))
-  is_changed "$name" || continue
-
-  previous=$(jq -r --arg n "$name" '.[$n] // empty' "$NEWVERSIONS")
-  version=$(next_version "$previous")
-
-  jq -nc --arg name "$name" --arg version "$version" --arg previous "$previous" \
-    '{name:$name, version:$version, previous:$previous}' >> "$ROWS"
-
-  BUMP[${#BUMP[@]}]="bump $name to version $version"
-  jq --arg n "$name" --arg v "$version" '.[$n] = $v' "$NEWVERSIONS" > "$NEWVERSIONS.next"
-  mv "$NEWVERSIONS.next" "$NEWVERSIONS"
-done
-
-PACKAGES=$(jq -s '.' "$ROWS")
+while IFS= read -r line; do
+  [ -n "$line" ] && BUMP[${#BUMP[@]}]="$line"
+done < <(printf '%s' "$PACKAGES" | jq -r '.[] | "bump \(.name) to version \(.version)"')
 COUNT=${#BUMP[@]}
 
 SUBJECT="chore: bump version [skip ci]"
 BODY=""
-if [ "$COUNT" -gt 0 ]; then
-  BODY=$(printf '%s\n' "${BUMP[@]}")
-fi
+[ "$COUNT" -gt 0 ] && BODY=$(printf '%s\n' "${BUMP[@]}")
 MESSAGE="$SUBJECT"
 [ -n "$BODY" ] && MESSAGE="$SUBJECT
 
@@ -154,7 +187,7 @@ PLAN=$(jq -n --argjson packages "$PACKAGES" --arg message "$MESSAGE" \
 # ---------------------------------------------------------------------------
 # Apply: rewrite the versions file, then one commit covering every package.
 # ---------------------------------------------------------------------------
-if [ "$MODE" != plan ] && [ "$COUNT" -gt 0 ]; then
+if [ "$APPLY" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
   cp "$NEWVERSIONS" "$VERSIONS"
 
   git config user.name 'github-actions[bot]'
@@ -167,7 +200,7 @@ fi
 # ---------------------------------------------------------------------------
 # Publish: one push, then hand the plan to the deploy workflow.
 # ---------------------------------------------------------------------------
-if [ "$MODE" = publish ] && [ "$COUNT" -gt 0 ]; then
+if [ "$PUBLISH" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
   BRANCH="${INPUT_BASE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
   git push origin "$BRANCH" >&2
 
