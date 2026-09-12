@@ -176,15 +176,32 @@ expect "t14 b matches phase 1" "$(jq -r '."pkg-b"' versions.json)" "$(printf '%s
 expect "t14 no tags"        "$(git tag -l | wc -l | tr -d ' ')" "0"
 
 # --- 15. --base that is not a commit here is refused, not guessed ---------
-fixture t16
+fixture t15
 expect "t15 refuses bad base" \
   "$(run --base 0000000000000000000000000000000000000000 2>&1 | grep -c 'not a commit' || true)" "1"
 expect "t15 refuses missing base" \
   "$(run --base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef 2>&1 | grep -c 'not a commit' || true)" "1"
 
-# --- 16. message output is JSON-encoded for GITHUB_OUTPUT ----------------
+# --- 16. both detection paths report `changed` into GITHUB_OUTPUT ---------
+# The workflow gates every later job on `changed != ''`. Emitting it only from
+# the paths-filter branch left the --base branch with an empty value, so the
+# whole pipeline silently did nothing.
 fixture t16
-expect "t15 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
+mkdir -p a && echo x > a/f && git add -A && git commit -q -m "feat: x"
+B=$(git rev-parse HEAD~1)
+expect "t16 --base reports changed" \
+  "$(CALVER_NOW=2026-09-15 GITHUB_OUTPUT="$PWD/out" bash "$SCRIPT" --manifest .github/release-packages.json --phase bump-versions --base "$B" >/dev/null; grep '^changed=' out)" \
+  "changed=pkg-a"
+expect "t16 --changed reports changed" \
+  "$(CALVER_NOW=2026-09-15 GITHUB_OUTPUT="$PWD/out2" bash "$SCRIPT" --manifest .github/release-packages.json --phase bump-versions --changed pkg-a,pkg-b >/dev/null; grep '^changed=' out2)" \
+  "changed=pkg-a,pkg-b"
+expect "t16 nothing changed reports empty" \
+  "$(CALVER_NOW=2026-09-15 GITHUB_OUTPUT="$PWD/out3" bash "$SCRIPT" --manifest .github/release-packages.json --phase bump-versions --changed '' >/dev/null; grep '^changed=' out3)" \
+  "changed="
+
+# --- 17. message output is JSON-encoded for GITHUB_OUTPUT ----------------
+fixture t17
+expect "t17 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
 
 echo
 echo "passed: $PASS   failed: $FAIL"

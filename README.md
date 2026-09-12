@@ -125,6 +125,7 @@ touched more than one package.
 | `manifest` | `.github/release-packages.json` | |
 | `versions` | `versions.json` | the only state |
 | `packages` | — | the plan JSON; required in `commit-versions`. Pass the `bump-versions` step's `packages` output. |
+| `base` | — | ref to diff against for change detection, e.g. `github.event.before`. Empty means `dorny/paths-filter` decides from the event. Using it needs a checkout deep enough to reach the ref. |
 | `base-branch` | `master` | branch `commit-versions` pushes to |
 | `deploy-workflow` | — | workflow file to dispatch once after committing, with a `packages` input holding the plan JSON |
 
@@ -165,5 +166,5 @@ version → `MICRO + 1`. New month → `MICRO = 1`. Never released → `1`.
 bash tests/run.sh
 ```
 
-36 fixture-based checks covering the version math, the state file, change
-detection, phase/flag validation, and the emitted commit.
+41 fixture-based checks covering the version math, the state file, both change
+detection paths, phase/flag validation, and the emitted commit.

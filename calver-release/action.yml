@@ -53,7 +53,7 @@ inputs:
 outputs:
   changed:
     description: Comma-separated names of packages this push changed.
-    value: ${{ steps.detect_list.outputs.list }}
+    value: ${{ steps.release.outputs.changed }}
   packages:
     description: JSON array of {name, version, previous} for released packages.
     value: ${{ steps.release.outputs.packages }}

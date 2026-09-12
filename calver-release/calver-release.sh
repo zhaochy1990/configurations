@@ -255,5 +255,8 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "released=$(printf '%s' "$PLAN" | jq -r '.released')"
     echo "packages=$(printf '%s' "$PACKAGES" | jq -c '.')"
     echo "message=$(printf '%s' "$MESSAGE" | jq -Rs '.')"
+    # Emitted here rather than by the caller's detector so that the --base path
+    # (which detects inside this script) reports it too.
+    echo "changed=$(printf '%s' "$PACKAGES" | jq -r '[.[].name] | join(",")')"
   } >> "$GITHUB_OUTPUT"
 fi
