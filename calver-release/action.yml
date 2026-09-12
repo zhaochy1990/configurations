@@ -1,0 +1,103 @@
+name: CalVer Release
+description: >
+  Per-package CalVer release for monorepos. State lives in one root versions
+  file, so there are no git tags and no commit-message markers.
+
+  mode: plan  — detect which packages the push changed (dorny/paths-filter,
+                filters generated from the manifest) and compute their next
+                versions. Writes nothing.
+  mode: bump  — rewrite the versions file and create ONE
+                "chore: bump version [skip ci]" commit listing every package,
+                then push and dispatch the deploy workflow. Run this only after
+                the image builds have succeeded.
+
+inputs:
+  mode:
+    description: '"plan" or "bump".'
+    required: false
+    default: plan
+  manifest:
+    description: Path to the release manifest JSON.
+    required: false
+    default: .github/release-packages.json
+  versions:
+    description: Path to the root versions file.
+    required: false
+    default: versions.json
+  changed:
+    description: >
+      Comma-separated changed package names. Required in bump mode — pass the
+      `changed` output from the matching plan step so both agree.
+    required: false
+    default: ''
+  base-branch:
+    description: Branch to commit and push to (bump mode).
+    required: false
+    default: master
+  deploy-workflow:
+    description: >
+      Workflow file to dispatch once after publishing, with a `packages` input
+      holding the plan JSON. Leave empty to skip.
+    required: false
+    default: ''
+
+outputs:
+  changed:
+    description: Comma-separated names of packages this push changed.
+    value: ${{ inputs.mode == 'plan' && steps.detect_list.outputs.list || inputs.changed }}
+  packages:
+    description: JSON array of {name, version, previous} for released packages.
+    value: ${{ steps.release.outputs.packages }}
+  message:
+    description: The bump commit message (subject + body).
+    value: ${{ steps.release.outputs.message }}
+  released:
+    description: '"true" when at least one package was released.'
+    value: ${{ steps.release.outputs.released }}
+
+runs:
+  using: composite
+  steps:
+    # filters + detection only run in plan mode; bump mode is told what changed.
+    - id: filters
+      if: inputs.mode == 'plan'
+      shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest }}
+      run: |
+        set -euo pipefail
+        {
+          echo "filters<<__CALVER_EOF__"
+          jq -r '.packages[] | "\(.name):\n" + ([.paths[] | "  - " + (. | @json)] | join("\n"))' "$MANIFEST"
+          echo "__CALVER_EOF__"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: detect
+      if: inputs.mode == 'plan'
+      uses: dorny/paths-filter@v3
+      with:
+        filters: ${{ steps.filters.outputs.filters }}
+
+    - id: detect_list
+      if: inputs.mode == 'plan'
+      shell: bash
+      env:
+        CHANGES: ${{ steps.detect.outputs.changes }}
+      run: echo "list=$(printf '%s' "$CHANGES" | jq -r 'join(",")')" >> "$GITHUB_OUTPUT"
+
+    - id: release
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MODE: ${{ inputs.mode }}
+        MANIFEST: ${{ inputs.manifest }}
+        VERSIONS: ${{ inputs.versions }}
+        # plan mode uses what it detected; bump mode uses what it was handed.
+        CHANGED: ${{ inputs.mode == 'plan' && steps.detect_list.outputs.list || inputs.changed }}
+        INPUT_BASE_BRANCH: ${{ inputs.base-branch }}
+        INPUT_DEPLOY_WORKFLOW: ${{ inputs.deploy-workflow }}
+      run: |
+        set -euo pipefail
+        args=(--manifest "$MANIFEST" --versions "$VERSIONS" --changed "$CHANGED")
+        if [ "$MODE" = bump ]; then args+=(--publish); fi
+        bash "$ACTION_PATH/calver-release.sh" "${args[@]}"
