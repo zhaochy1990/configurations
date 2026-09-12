@@ -3,9 +3,16 @@
 # calver-release.sh — per-package CalVer release for a monorepo.
 #
 # Phases:
-#   plan   --changed a,b | --base <sha>   detect + compute; writes nothing
-#   bump   --set <json> [--apply]         persist exactly what was built
-#   publish                                --apply, then push + dispatch deploy
+#   bump-versions    --changed a,b | --base <sha>
+#       Work out the next version of every package this push touched and print
+#       the plan. Writes nothing, commits nothing — it only produces the version
+#       numbers that the build step will tag artifacts with.
+#
+#   commit-versions  --set <plan json> [--push]
+#       Write those versions into the versions file and commit them. Meant to run
+#       only once the artifacts have been built AND pushed, so the recorded
+#       version always names something that exists. With --push it also pushes
+#       the branch and dispatches the deploy workflow.
 #
 # State lives in a single root versions file (default versions.json). There are
 # no git tags and no commit-message markers.
@@ -24,8 +31,8 @@ CHANGED=""
 CHANGED_MODE=""
 BASE=""
 SET=""
-APPLY=0
-PUBLISH=0
+PHASE=""
+PUSH=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,23 +41,46 @@ while [ $# -gt 0 ]; do
     --changed)  CHANGED="${2?--changed needs a value}"; CHANGED_MODE=list; shift 2 ;;
     --base)     BASE="${2?--base needs a value}"; CHANGED_MODE=base; shift 2 ;;
     --set)      SET="${2?--set needs a value}"; shift 2 ;;
-    --apply)    APPLY=1; shift ;;
-    --publish)  APPLY=1; PUBLISH=1; shift ;;
-    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
+    --phase)    PHASE="${2:?--phase needs a value}"; shift 2 ;;
+    --push)     PUSH=1; shift ;;
+    -h|--help)  sed -n '3,20p' "$0"; exit 0 ;;
     *) echo "calver-release: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 command -v jq >/dev/null || { echo "calver-release: jq is required" >&2; exit 1; }
+case "$PHASE" in
+  bump-versions)
+    if [ -n "$SET" ]; then
+      echo "calver-release: --set belongs to --phase commit-versions" >&2
+      exit 2
+    fi
+    if [ -z "$CHANGED_MODE" ]; then
+      echo "calver-release: --phase bump-versions needs --changed a,b or --base <sha>" >&2
+      exit 2
+    fi
+    ;;
+  commit-versions)
+    if [ -n "$CHANGED_MODE" ]; then
+      echo "calver-release: --changed/--base belong to --phase bump-versions" >&2
+      exit 2
+    fi
+    if [ -z "$SET" ]; then
+      echo "calver-release: --phase commit-versions needs --set <plan json>" >&2
+      exit 2
+    fi
+    ;;
+  '')
+    echo "calver-release: --phase bump-versions | commit-versions is required" >&2
+    exit 2
+    ;;
+  *)
+    echo "calver-release: unknown phase: $PHASE" >&2
+    exit 2
+    ;;
+esac
+
 [ -f "$MANIFEST" ] || { echo "calver-release: no manifest at $MANIFEST" >&2; exit 1; }
-if [ -z "$CHANGED_MODE" ] && [ -z "$SET" ]; then
-  echo "calver-release: pass --changed a,b / --base <sha> to plan, or --set <json> to bump" >&2
-  exit 2
-fi
-if [ -n "$SET" ] && [ -n "$CHANGED_MODE" ]; then
-  echo "calver-release: --set and --changed/--base are mutually exclusive" >&2
-  exit 2
-fi
 
 TMPD=$(mktemp -d)
 trap 'rm -rf "$TMPD"' EXIT
@@ -88,15 +118,14 @@ manifest_names() { jq -r '.packages[].name' "$MANIFEST"; }
 # ---------------------------------------------------------------------------
 # Resolve the release set.
 #
-#   --changed / --base   plan: detect what this push touched, then compute the
-#                        next version by reading the versions file.
-#   --set <json>         bump: persist the plan that was already built and
-#                        shipped. Deliberately does NOT recompute — if another
-#                        push lands while this build runs, recomputing here
-#                        would advance the versions file to a number that
-#                        nothing was ever built for.
+#   bump-versions   detect what this push touched, then compute the next version
+#                   by reading the versions file.
+#   commit-versions persist the plan that was already built and shipped.
+#                   Deliberately does NOT recompute — if another push lands
+#                   while this build runs, recomputing here would record a
+#                   version that nothing was ever built for.
 # ---------------------------------------------------------------------------
-if [ -n "$SET" ]; then
+if [ "$PHASE" = commit-versions ]; then
   PACKAGES=$(printf '%s' "$SET" | jq -c '.')
   while IFS= read -r n; do
     [ -n "$n" ] || continue
@@ -185,9 +214,10 @@ PLAN=$(jq -n --argjson packages "$PACKAGES" --arg message "$MESSAGE" \
   '{released: (($packages | length) > 0), message: $message, packages: $packages}')
 
 # ---------------------------------------------------------------------------
-# Apply: rewrite the versions file, then one commit covering every package.
+# commit-versions: rewrite the versions file, then one commit covering every
+# package. Nothing above this line has touched the working tree.
 # ---------------------------------------------------------------------------
-if [ "$APPLY" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
+if [ "$PHASE" = commit-versions ] && [ "$COUNT" -gt 0 ]; then
   cp "$NEWVERSIONS" "$VERSIONS"
 
   git config user.name 'github-actions[bot]'
@@ -198,9 +228,9 @@ if [ "$APPLY" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Publish: one push, then hand the plan to the deploy workflow.
+# --push: one push, then hand the plan to the deploy workflow.
 # ---------------------------------------------------------------------------
-if [ "$PUBLISH" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
+if [ "$PUSH" -eq 1 ] && [ "$COUNT" -gt 0 ]; then
   BRANCH="${INPUT_BASE_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
   git push origin "$BRANCH" >&2
 
