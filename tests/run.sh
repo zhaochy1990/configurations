@@ -175,8 +175,15 @@ expect "t14 a matches phase 1" "$(jq -r '."pkg-a"' versions.json)" "$(printf '%s
 expect "t14 b matches phase 1" "$(jq -r '."pkg-b"' versions.json)" "$(printf '%s' "$PLAN" | jq -r '.[1].version')"
 expect "t14 no tags"        "$(git tag -l | wc -l | tr -d ' ')" "0"
 
-# --- 15. message output is JSON-encoded for GITHUB_OUTPUT ----------------
-fixture t15
+# --- 15. --base that is not a commit here is refused, not guessed ---------
+fixture t16
+expect "t15 refuses bad base" \
+  "$(run --base 0000000000000000000000000000000000000000 2>&1 | grep -c 'not a commit' || true)" "1"
+expect "t15 refuses missing base" \
+  "$(run --base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef 2>&1 | grep -c 'not a commit' || true)" "1"
+
+# --- 16. message output is JSON-encoded for GITHUB_OUTPUT ----------------
+fixture t16
 expect "t15 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
 
 echo

@@ -139,6 +139,14 @@ else
     CHANGED_LIST=$(printf '%s' "$CHANGED" | tr ',' ' ')
   else
     CHANGED_LIST=""
+    # github.event.before is all-zeroes when a branch is first pushed, and can
+    # be missing after a force-push or on a shallow clone. Refuse rather than
+    # guess: "everything changed" would cut a release nobody asked for.
+    if ! git rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null; then
+      echo "calver-release: --base $BASE is not a commit in this clone." >&2
+      echo "calver-release: fetch it (fetch-depth: 0), or pass --changed a,b." >&2
+      exit 1
+    fi
     DIFF_FILES=$(git diff --name-only "$BASE" HEAD)
     n_pkgs=$(jq '.packages | length' "$MANIFEST")
     k=0
