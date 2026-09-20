@@ -1,0 +1,88 @@
+name: 'Notify WeCom group bot'
+description: >
+  Post the outcome of a GitHub Actions workflow run to a WeCom Work (企业微信)
+  group robot as a markdown message: result icon, workflow name, repo/branch,
+  trigger, duration and a clickable link to the run. On failure, lists the
+  failed (or cancelled) jobs.
+
+  Two usage modes:
+
+  1. Single-job workflow — call as the LAST STEP of the job, with `if: always()`
+     on the step. The action reads job.status; pass nothing else:
+
+       - name: Notify WeCom
+         if: always()
+         uses: zhaochy1990/configurations/notify-wecom@v1
+         with:
+           webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+
+  2. Multi-job workflow — add a final `notify` job that `needs:` every real job,
+     with `if: always()`, and pass needs_json so the action can derive the
+     overall conclusion (failure > cancelled > success; skipped jobs ignored)
+     and list failed job ids:
+
+       notify:
+         needs: [build, test, publish]
+         if: always()
+         steps:
+           - uses: zhaochy1990/configurations/notify-wecom@v1
+             with:
+               webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+               needs_json: ${{ toJSON(needs) }}
+
+  The action NEVER fails: a missing webhook or a failed send only emits a
+  ::warning:: — notifications must never turn a green pipeline red.
+
+inputs:
+  webhook_url:
+    description: >
+      WeCom group-bot webhook
+      (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...), usually
+      ${{ secrets.WECOM_WEBHOOK_URL }}. Empty → warning + skip, exit 0.
+    required: false
+    default: ''
+  needs_json:
+    description: >
+      toJSON(needs) from a final notify job (mode 2). Derives the overall
+      conclusion and the failed-job list. Leave empty in mode 1.
+    required: false
+    default: ''
+  status:
+    description: >
+      Explicit conclusion override ('success' | 'failure' | 'cancelled').
+      Normally leave empty: mode 1 uses job.status, mode 2 derives from
+      needs_json.
+    required: false
+    default: ''
+  extra_info:
+    description: >
+      Optional extra markdown line(s) inserted before the run link, e.g.
+      "> 镜像无变更，未开部署 PR".
+    required: false
+    default: ''
+  title:
+    description: >
+      Display name of the workflow. Defaults to github.workflow.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bash "${{ github.action_path }}/notify-wecom.sh"
+      env:
+        WECOM_WEBHOOK_URL: ${{ inputs.webhook_url }}
+        INPUT_STATUS: ${{ inputs.status }}
+        NEEDS_JSON: ${{ inputs.needs_json }}
+        EXTRA_INFO: ${{ inputs.extra_info }}
+        INPUT_TITLE: ${{ inputs.title }}
+        JOB_STATUS: ${{ job.status }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        GITHUB_WORKFLOW: ${{ github.workflow }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_RUN_STARTED_AT: ${{ github.run_started_at }}
