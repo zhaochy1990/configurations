@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Fixture-based checks for calver-release.sh. Run: bash tests/run.sh
+# Fixture-based checks for calver-release.sh and notify-wecom.sh. Run: bash tests/run.sh
 set -euo pipefail
 
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/calver-release/calver-release.sh"
+TESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT=$(mktemp -d)
 trap 'rm -rf "$ROOT"' EXIT
 PASS=0
@@ -204,5 +205,8 @@ fixture t17
 expect "t17 message json" "$(run --changed pkg-a | jq -r '.message' | jq -Rs .)" '"chore: bump version [skip ci]\n\nbump pkg-a to version 2026.9.1\n"'
 
 echo
-echo "passed: $PASS   failed: $FAIL"
+echo "calver-release: passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
+
+# notify-wecom has its own checks (separate PASS/FAIL counters).
+bash "$TESTS/notify-wecom-test.sh"

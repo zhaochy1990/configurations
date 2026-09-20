@@ -160,11 +160,84 @@ version → `MICRO + 1`. New month → `MICRO = 1`. Never released → `1`.
 - `commit-versions` must be the last job: it advances `versions.json`, which
   downstream consumers read.
 
+## `notify-wecom`
+
+Posts the outcome of a GitHub Actions run to a WeCom Work (企业微信) group robot
+as one markdown message: result icon, workflow name, repo/branch, trigger,
+duration and a clickable link to the run. On failure it lists the failed (or
+cancelled) jobs.
+
+The action **never fails the calling pipeline** — a missing webhook or a failed
+send only emits a `::warning::`. A notification is a side channel; it must not
+turn a green run red.
+
+Two usage modes, chosen by job count:
+
+**Single-job workflow** — last step of the job, with `if: always()`. The action
+reads `job.status`:
+
+```yaml
+      - name: Notify WeCom
+        if: always()
+        uses: zhaochy1990/configurations/notify-wecom@v1
+        with:
+          webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+```
+
+**Multi-job workflow** — a final `notify` job that needs every real job, with
+`if: always()`. Pass `toJSON(needs)` so the action can derive the overall
+conclusion (failure > cancelled > success; skipped jobs are ignored) and list
+failed job ids:
+
+```yaml
+  notify:
+    needs: [build, test, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - uses: zhaochy1990/configurations/notify-wecom@v1
+        with:
+          webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+          needs_json: ${{ toJSON(needs) }}
+```
+
+### Setup
+
+**1.** Create a group robot in the target WeCom group (群设置 → 群机器人 → 添加)
+and copy its webhook URL.
+
+**2.** Store it as the `WECOM_WEBHOOK_URL` repository secret.
+
+### Inputs
+
+| input | default | notes |
+|---|---|---|
+| `webhook_url` | — | the robot webhook; empty → warning + skip, exit 0 |
+| `needs_json` | — | `toJSON(needs)` from a final notify job (multi-job mode) |
+| `status` | — | explicit override: `success` / `failure` / `cancelled` |
+| `extra_info` | — | extra markdown line(s) before the run link |
+| `title` | `github.workflow` | display name of the workflow |
+
+### Notes
+
+- Schedule-triggered runs show 定时任务 instead of an actor; `github.triggering_actor`
+  is preferred over `github.actor`, so token-dispatched runs name the real
+  triggerer.
+- Content is capped at WeCom's 4096-byte limit; the run link is the line that
+  always survives.
+- A cancelled run may send nothing if its notify job never started — `always()`
+  cannot wake a job that was never launched. Treat cancellation notices as
+  best-effort.
+
 ## Development
 
 ```sh
 bash tests/run.sh
 ```
 
-41 fixture-based checks covering the version math, the state file, both change
-detection paths, phase/flag validation, and the emitted commit.
+41 fixture-based checks for calver-release covering the version math, the state
+file, both change detection paths, phase/flag validation, and the emitted
+commit; 26 checks for notify-wecom covering both usage modes, status
+derivation, the trigger line, the byte cap and the never-fail guarantee.
