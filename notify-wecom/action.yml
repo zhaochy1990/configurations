@@ -28,7 +28,7 @@ description: >
            - uses: zhaochy1990/configurations/notify-wecom@v1
              with:
                webhook_url: secrets.WECOM_WEBHOOK_URL
-               needs_json: ${{ toJSON(needs) }}
+               needs_json: toJSON(needs)
 
   The action NEVER fails: a missing webhook or a failed send only emits a
   ::warning:: — notifications must never turn a green pipeline red.
