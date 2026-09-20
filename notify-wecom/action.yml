@@ -14,7 +14,7 @@ description: >
          if: always()
          uses: zhaochy1990/configurations/notify-wecom@v1
          with:
-           webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+           webhook_url: secrets.WECOM_WEBHOOK_URL
 
   2. Multi-job workflow — add a final `notify` job that `needs:` every real job,
      with `if: always()`, and pass needs_json so the action can derive the
@@ -27,7 +27,7 @@ description: >
          steps:
            - uses: zhaochy1990/configurations/notify-wecom@v1
              with:
-               webhook_url: ${{ secrets.WECOM_WEBHOOK_URL }}
+               webhook_url: secrets.WECOM_WEBHOOK_URL
                needs_json: ${{ toJSON(needs) }}
 
   The action NEVER fails: a missing webhook or a failed send only emits a
@@ -38,7 +38,7 @@ inputs:
     description: >
       WeCom group-bot webhook
       (https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...), usually
-      ${{ secrets.WECOM_WEBHOOK_URL }}. Empty → warning + skip, exit 0.
+      secrets.WECOM_WEBHOOK_URL. Empty → warning + skip, exit 0.
     required: false
     default: ''
   needs_json:

@@ -115,5 +115,15 @@ expect "content within 4096 bytes" "$([ ${#out} -le 4096 ] && echo yes)" "yes"
 expect_contains "run link survives cap" "$out" '查看运行详情'
 expect "long extra dropped" "$(grep -c 'xxxx' <<<"$out")" "0"
 
+# action.yml is evaluated as a template: ${{ secrets.* }} inside it (even in
+# descriptions) fails the whole action at load time. Callers pass the webhook
+# in; the action must never reference the secrets context itself.
+if grep -qE '\$\{\{[[:space:]]*secrets\.' "$(dirname "$SCRIPT")/action.yml"; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: action.yml references the secrets context, which is unavailable in composite action metadata"
+else
+  PASS=$((PASS + 1))
+fi
+
 echo "notify-wecom: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
