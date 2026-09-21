@@ -33,6 +33,11 @@ description: >
   The action NEVER fails: a missing webhook or a failed send only emits a
   ::warning:: — notifications must never turn a green pipeline red.
 
+  The message also names WHAT ran, derived automatically from the event: on
+  pull_request the PR number + title (linked), on push the head commit
+  subject + short sha (linked). This is what makes two identical-looking
+  "Pin images 成功" or "CI 成功" rows distinguishable in the group.
+
 inputs:
   webhook_url:
     description: >
@@ -86,3 +91,9 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_RUN_STARTED_AT: ${{ github.run_started_at }}
+        # What-ran context (empty outside their event):
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_HTML_URL: ${{ github.event.pull_request.html_url }}
+        HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        GITHUB_SHA: ${{ github.sha }}

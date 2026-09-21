@@ -96,6 +96,29 @@ expect_contains "extra_info present" "$out" '> 镜像无变更，未开部署 PR
 link_after_extra=$(sed -n '/镜像无变更/,$p' <<<"$out" | grep -c '查看运行详情')
 expect "run link after extra_info" "$link_after_extra" "1"
 
+# push event → head commit subject + short sha, linked
+out=$(run GITHUB_SHA=1234567890abcdef1234567890abcdef12345678 \
+      HEAD_COMMIT_MESSAGE=$'Merge pull request #42 from feat/x\n\nlong body' | content_of)
+expect_contains "commit subject shown" "$out" '[1234567 Merge pull request #42 from feat/x]'
+expect_contains "commit link" "$out" 'https://github.com/acme/stride/commit/1234567890abcdef1234567890abcdef12345678'
+expect "commit body dropped" "$(grep -c 'long body' <<<"$out")" "0"
+
+# pull_request event → PR number + title, linked; no commit line
+out=$(run GITHUB_EVENT_NAME=pull_request PR_NUMBER=7 PR_TITLE='fix: pin notifications' \
+      PR_HTML_URL='https://github.com/acme/stride/pull/7' GITHUB_SHA=abc | content_of)
+expect_contains "pr line shown" "$out" '[#7 fix: pin notifications](https://github.com/acme/stride/pull/7)'
+expect "no commit line on pr" "$(grep -c '提交:' <<<"$out")" "0"
+
+# workflow_dispatch (no PR, no head_commit) → no what-ran line
+out=$(run GITHUB_EVENT_NAME=workflow_dispatch | content_of)
+expect "no what-ran line on dispatch" "$(grep -cE 'PR:|提交:' <<<"$out")" "0"
+
+# long PR title is truncated
+out=$(run GITHUB_EVENT_NAME=pull_request PR_NUMBER=8 \
+      PR_TITLE="$(printf 't%.0s' $(seq 1 100))" \
+      PR_HTML_URL='https://github.com/acme/stride/pull/8' | content_of)
+expect "pr title truncated" "$([ ${#out} -lt 600 ] && echo yes)" "yes"
+
 # missing webhook → warning + exit 0, no output payload
 out=$(WECOM_WEBHOOK_URL= DRY_RUN=1 bash "$SCRIPT" 2>&1) && rc=0 || rc=$?
 expect "missing webhook exits 0" "$rc" "0"
