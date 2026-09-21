@@ -57,9 +57,28 @@ case "$status" in
   cancelled) head='<font color="comment">⚪ '"$title"' 已取消</font>' ;;
 esac
 
+# --- what ran: PR or head commit ---------------------------------------------
+# The line that tells two look-alike notifications apart. First line only,
+# truncated, and newlines stripped — a PR title must not break the layout.
+one_line() { tr '\n' ' ' <<<"$1" | sed 's/  */ /g; s/^ //; s/ $//'; }
+
+what_ran=""
+if [ -n "${PR_NUMBER:-}" ]; then
+  pr_title=$(one_line "${PR_TITLE:-}")
+  [ ${#pr_title} -gt 60 ] && pr_title="${pr_title:0:59}…"
+  what_ran="> PR:[#${PR_NUMBER} ${pr_title}](${PR_HTML_URL:-${GITHUB_SERVER_URL:-https://github.com}/${repo}/pull/${PR_NUMBER}})"
+elif [ -n "${HEAD_COMMIT_MESSAGE:-}" ]; then
+  subject=$(one_line "${HEAD_COMMIT_MESSAGE%%$'\n'*}")
+  [ ${#subject} -gt 60 ] && subject="${subject:0:59}…"
+  what_ran="> 提交:[${GITHUB_SHA:0:7} ${subject}](${GITHUB_SERVER_URL:-https://github.com}/$repo/commit/${GITHUB_SHA:-})"
+fi
+
 content="$head
 > 仓库:[$repo](${GITHUB_SERVER_URL:-https://github.com}/$repo)
 > 分支:${GITHUB_REF_NAME:-unknown}　触发:$trigger"
+
+[ -n "$what_ran" ] && content+="
+$what_ran"
 
 # Duration since run_started_at; skipped silently if the timestamp is unusable.
 if [ -n "${GITHUB_RUN_STARTED_AT:-}" ] \
