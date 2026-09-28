@@ -38,6 +38,11 @@ description: >
   subject + short sha (linked). This is what makes two identical-looking
   "Pin images 成功" or "CI 成功" rows distinguishable in the group.
 
+  The title itself carries the run's ref after the workflow name — the branch
+  ("Release 成功 · master"), or "PR #N" on pull_request events (whose
+  GITHUB_REF_NAME is the merge-ref "N/merge") — so a master run and a PR run
+  of the same workflow are told apart without opening the message.
+
 inputs:
   webhook_url:
     description: >

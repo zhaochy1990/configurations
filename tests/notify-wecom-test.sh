@@ -50,6 +50,7 @@ expect_contains() { # expect_contains <label> <haystack> <needle>
 # mode 1: job.status=success → green message with trigger and run link
 out=$(run | content_of)
 expect_contains "success icon" "$out" '✅ Release 成功'
+expect_contains "title carries branch" "$out" '✅ Release 成功 · master'
 expect_contains "repo link" "$out" '[acme/stride](https://github.com/acme/stride)'
 expect_contains "branch + trigger" "$out" '分支:master　触发:push by zoe'
 expect_contains "run link" "$out" 'https://github.com/acme/stride/actions/runs/42'
@@ -107,6 +108,7 @@ expect "commit body dropped" "$(grep -c 'long body' <<<"$out")" "0"
 out=$(run GITHUB_EVENT_NAME=pull_request PR_NUMBER=7 PR_TITLE='fix: pin notifications' \
       PR_HTML_URL='https://github.com/acme/stride/pull/7' GITHUB_SHA=abc | content_of)
 expect_contains "pr line shown" "$out" '[#7 fix: pin notifications](https://github.com/acme/stride/pull/7)'
+expect_contains "title carries pr number" "$out" '✅ Release 成功 · PR #7'
 expect "no commit line on pr" "$(grep -c '提交:' <<<"$out")" "0"
 
 # workflow_dispatch (no PR, no head_commit) → no what-ran line
@@ -118,6 +120,10 @@ out=$(run GITHUB_EVENT_NAME=pull_request PR_NUMBER=8 \
       PR_TITLE="$(printf 't%.0s' $(seq 1 100))" \
       PR_HTML_URL='https://github.com/acme/stride/pull/8' | content_of)
 expect "pr title truncated" "$([ ${#out} -lt 600 ] && echo yes)" "yes"
+
+# a long branch name is truncated in the title instead of stretching it
+out=$(run GITHUB_REF_NAME="$(printf 'feat/%.0s' $(seq 1 20))" | content_of)
+expect_contains "long ref truncated" "$out" '✅ Release 成功 · feat/feat/feat/feat/feat/feat…'
 
 # missing webhook → warning + exit 0, no output payload
 out=$(WECOM_WEBHOOK_URL= DRY_RUN=1 bash "$SCRIPT" 2>&1) && rc=0 || rc=$?
