@@ -42,6 +42,17 @@ fi
 # --- message parts -----------------------------------------------------------
 title="${INPUT_TITLE:-${GITHUB_WORKFLOW:-GitHub Actions}}"
 repo="${GITHUB_REPOSITORY:-unknown/unknown}"
+
+# Ref label for the title: the part that tells a master run apart from a PR
+# run of the same workflow at a glance. PR events show "PR #N" (their
+# GITHUB_REF_NAME is the merge-ref "N/merge"); every other event shows its
+# branch name. A long feature-branch name must not stretch the title line.
+if [ -n "${PR_NUMBER:-}" ]; then
+  ref="PR #${PR_NUMBER}"
+else
+  ref="${GITHUB_REF_NAME:-}"
+fi
+[ ${#ref} -gt 30 ] && ref="${ref:0:29}…"
 run_url="${GITHUB_SERVER_URL:-https://github.com}/$repo/actions/runs/${GITHUB_RUN_ID:-}"
 
 actor="${GITHUB_TRIGGERING_ACTOR:-${GITHUB_ACTOR:-}}"
@@ -52,9 +63,9 @@ else
 fi
 
 case "$status" in
-  success)   head='<font color="info">✅ '"$title"' 成功</font>' ;;
-  failure)   head='<font color="warning">❌ '"$title"' 失败</font>' ;;
-  cancelled) head='<font color="comment">⚪ '"$title"' 已取消</font>' ;;
+  success)   head='<font color="info">✅ '"$title"' 成功'"${ref:+ · $ref}"'</font>' ;;
+  failure)   head='<font color="warning">❌ '"$title"' 失败'"${ref:+ · $ref}"'</font>' ;;
+  cancelled) head='<font color="comment">⚪ '"$title"' 已取消'"${ref:+ · $ref}"'</font>' ;;
 esac
 
 # --- what ran: PR or head commit ---------------------------------------------
